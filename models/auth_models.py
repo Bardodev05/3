@@ -1,9 +1,26 @@
-# carpeta moldes nombre del archivo auth_models.py
-from pydantic import BaseModel
+# En models/auth_models.py
 
-class User(BaseModel):
+from typing import Optional, List
+from pydantic import BaseModel, EmailStr
+from models.models import Instrument
+from models.models_instru import InstrumentCreate
+
+class UserBase(BaseModel):
     username: str
     full_name: str
-    email: str
-    disabled: bool
+    email: EmailStr
+
+class UserCreate(UserBase):
+    password: str
+    instruments: Optional[List['InstrumentCreate']] = None
+
+class User(UserBase):
+    id: int
+    instruments: List['Instrument'] = []
+
+    class Config:
+        orm_mode = True
+        arbitrary_types_allowed = True
+
+
 

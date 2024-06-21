@@ -1,52 +1,78 @@
-# carpeta router nombre del archivo:rou_instru,py
-# la idea es que se debe de autentificar para acceder al crud
-# los isntrumentos deden de ir ala base de datos
-# y los usuarios autentidicados tamnien
+# carpeta router nombre archivo rou_instru.py
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-from database import get_db
-from models.models_instru import Instrument as InstrumentSchema
-from models.models import Instrument as InstrumentModel
-from router.jwt_auth_users import User, current_user
+# from models.models import Instrument as InstrumentModel,User as UserModel, UserInstrumentAssociation
+from models.models_instru import Instrument as InstrumentSchema, InstrumentCreate
+from models.modelsdb import get_db
+from router.jwt_auth_users import UserDB, get_current_user
+from models.models import Instrument as InstrumentModel, User as UserModel, user_instrument_association
 
-router = APIRouter()
 
-@router.get("/instrumentos/{instrumento_id}", response_model=InstrumentSchema,tags=["Intrumentos"])
-async def get_instrument_id(instrumento_id: int, db: Session = Depends(get_db), current_user: User = Depends(current_user)):
+
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+routers = APIRouter(tags=["Instrumentos"])
+
+@routers.get("/instrumentos/{instrumento_id}", response_model=InstrumentSchema)
+async def get_instrumento(instrumento_id: int, db: Session = Depends(get_db)):
+    logger.info(f"Fetching instrument with ID: {instrumento_id}")
     instrumento = db.query(InstrumentModel).filter(InstrumentModel.id == instrumento_id).first()
     if not instrumento:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instrumento no encontrado")
+        logger.warning(f"Instrument with ID {instrumento_id} not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instrument not found")
     return instrumento
 
-@router.get("/instrumentos", response_model=List[InstrumentSchema],tags=["Intrumentos"])
-async def get_instruments(db: Session = Depends(get_db), current_user: User = Depends(current_user)):
-    return db.query(InstrumentModel).all()
 
-@router.post("/instrumento", response_model=InstrumentSchema, tags=["Intrumentos"])
-async def create_instrument(instrumento: InstrumentSchema, db: Session = Depends(get_db), current_user: User = Depends(current_user)):
-    instrumento_data = InstrumentModel(**instrumento.dict())
-    db.add(instrumento_data)
+@routers.get("/instrumentos", response_model=List[InstrumentSchema])
+async def get_instrumentos(db: Session = Depends(get_db)):
+    logger.info("Fetching all instruments")
+    instruments = db.query(InstrumentModel).all()
+    logger.info(f"Returned {len(instruments)} instruments")
+    return instruments
+
+@routers.post("/instrumento", response_model=InstrumentSchema)
+async def create_instrumento(instrumento: InstrumentCreate, db: Session = Depends(get_db), current_user: UserDB = Depends(get_current_user)):
+    logger.info(f"Creating new instrument for user: {current_user.username}")
+    db_user = db.query(UserModel).filter(UserModel.username == current_user.username).first()
+    if not db_user:
+        logger.error(f"User {current_user.username} not found")
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    new_instrumento = InstrumentModel(name=instrumento.name, description=instrumento.description, price=instrumento.price)
+    db.add(new_instrumento)
     db.commit()
-    db.refresh(instrumento_data)
-    return instrumento_data
+    db.refresh(new_instrumento)
+    
+    association = user_instrument_association(user_id=db_user.id, instrument_id=new_instrumento.id)
+    db.add(association)
+    db.commit()
+    db.refresh(new_instrumento)
+    
+    logger.info(f"New instrument created with ID: {new_instrumento.id}")
+    return new_instrumento
 
-@router.put("/instrumentos/{instrumento_id}", response_model=InstrumentSchema,tags=["Intrumentos"])
-async def update_instrumento(instrumento_id: int, instrumento: InstrumentSchema, db: Session = Depends(get_db), current_user: User = Depends(current_user)):
-    db_instrumento = db.query(InstrumentModel).filter(InstrumentModel.id == instrumento_id).first()
+@routers.put("/instrumento/{instrumento_id}", response_model=InstrumentSchema)
+async def update_instrumento(instrumento_id: int, instrumento: InstrumentCreate, db: Session = Depends(get_db), current_user: UserDB = Depends(get_current_user)):
+    db_instrumento = db.query(InstrumentModel).filter(InstrumentModel.id == instrumento_id, InstrumentModel.owners.contains(current_user.id)).first()
     if not db_instrumento:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instrumento no encontrado")
+        raise HTTPException(status_code=404, detail="Instrument not found or does not belong to the current user")
+    
     for key, value in instrumento.dict().items():
         setattr(db_instrumento, key, value)
+    
     db.commit()
-    db.refresh(db_instrumento)
     return db_instrumento
 
-@router.delete("/instrumento/{instrumento_id}",tags=["Intrumentos"])
-async def delete_instrumento(instrumento_id: int, db: Session = Depends(get_db), current_user: User = Depends(current_user)):
-    instrumento = db.query(InstrumentModel).filter(InstrumentModel.id == instrumento_id).first()
-    if not instrumento:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instrumento no encontrado")
-    db.delete(instrumento)
+@routers.delete("/instrumento/{instrumento_id}", response_model=InstrumentSchema)
+async def delete_instrumento(instrumento_id: int, db: Session = Depends(get_db), current_user: UserDB = Depends(get_current_user)):
+    db_instrumento = db.query(InstrumentModel).filter(InstrumentModel.id == instrumento_id, InstrumentModel.owners.contains(current_user.id)).first()
+    if not db_instrumento:
+        raise HTTPException(status_code=404, detail="Instrument not found or does not belong to the current user")
+    
+    db.delete(db_instrumento)
     db.commit()
-    return {"message": "Instrumento eliminado exitosamente"}
+    return db_instrumento

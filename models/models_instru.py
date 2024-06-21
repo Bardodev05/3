@@ -1,20 +1,20 @@
-# carptea models nombre del archivo: models_instru.py
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
-class Instrument(BaseModel):
-    id: Optional[int] = None
+# Define InstrumentBase as the base model for instrument-related models
+class InstrumentBase(BaseModel):
     name: str
     description: Optional[str] = None
     price: float
-    tags: Optional[dict] = None
+
+# Use InstrumentBase for creating new instruments
+class InstrumentCreate(InstrumentBase):
+    pass
+
+# Define Instrument as a separate model that includes an ID, inheriting from InstrumentBase
+class Instrument(InstrumentBase):
+    id: Optional[int] = None
 
     class Config:
         orm_mode = True
-
-# Nuevo modelo de Pydantic para la creación de usuario
-class UserCreate(BaseModel):
-    username: str
-    full_name: str
-    email: str
-    password: str
+        # arbitrary_types_allowed = True
