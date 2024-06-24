@@ -1,4 +1,4 @@
-# este archivo se llama database.py
+# nombre del archivo database.py
 from sqlalchemy.orm import Session
 from models.modelsdb import SessionLocal
 
@@ -8,5 +8,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
-

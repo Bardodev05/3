@@ -1,158 +1,91 @@
-# carpeta router nombre del archivo: jwt_auth_user.py
-# Esto es para que el usuario esté autentificado para acceder al CRUD de instrumentos
-# y los usuarios creados se van a la base de datos.
-
-from typing import Optional
+# carpeta router nombre del archivo jwt_auth_users.py
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from datetime import datetime, timedelta
 from jose import JWTError, jwt
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from passlib.context import CryptContext
-from datetime import datetime, timedelta
+from typing import Optional, List
 from database import get_db
-from models.models import User as UserModel
-from models.models_instru import UserCreate
-from sqlalchemy.orm import Session
+from models.auth_models import User as UserSchema, UserCreate
+from models.models import User as UserModel, Instrument as InstrumentModel, user_instrument_association
+from models.models_instru import Instrument as InstrumentSchema, InstrumentCreate
+
 
 ALGORITHM = "HS256"
-ACCESS_TOKEN_DURATION = 30  # Duración del token de acceso en minutos
+ACCESS_TOKEN_DURATION = 30
 SECRET = "16a986dae60c0a57dd20122dfe2bbddeaf86dc06d1986bf145076096f3dbc5a2"
 
 router = APIRouter(tags=["jwt_auth"])
-
-oauth2 = OAuth2PasswordBearer(tokenUrl="jwtauth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="jwtauth/login")
 crypt = CryptContext(schemes=["bcrypt"])
 
-class User(BaseModel):
+class UserDB(BaseModel):
     username: str
-    full_name: str
-    email: str
-    disabled: bool = False  # Agrega el atributo 'disabled' con un valor predeterminado
+    hashed_password: str
+    instruments: List[InstrumentSchema] = []
 
-class UserUpdate(BaseModel):
-    full_name: Optional[str] = None
-    email: Optional[str] = None
-    password: Optional[str] = None
+    class Config:
+        orm_mode = True
 
-
-class UserDB(User):
-    password: str
-
-users_db = {
-    "anderson": {
-        "username": "anderson",
-        "full_name": "anderson molina",
-        "email": "anderosmolina123@gmail.com",
-        "disabled": False,
-        "password": "$2a$12$vYI1XkaJZaWdYQVjjd6jtOxFqr/V/uZDzXy5u.PiUo/gUyZpowgNO"  # Contraseña cifrada con bcrypt
-    }
-}
-
-def search_user(username: str):
-    if username in users_db:
-        user_dict = users_db[username]
-        return User(**user_dict)
-
-# def search_user_db(username:str):
-#     if username in users_db:
-#         user_dict = users_db[username]
-#         return UserDB(**user_dict)
-
-def search_user_db(username: str, db: Session):
+def get_user(username: str, db: Session):
     return db.query(UserModel).filter(UserModel.username == username).first()
 
-# async def auth_user(token: str = Depends(oauth2)):
-#     exception = HTTPException(
-#         status_code=status.HTTP_401_UNAUTHORIZED,
-#         detail="Credenciales de autenticación inválidas",
-#         headers={"WWW-Authenticate": "Bearer"}
-#     )
-#     try:
-#         payload = jwt.decode(token, SECRET, algorithms=[ALGORITHM])
-#         username = payload.get("sub")
-#         if username is None:
-#             raise exception
-#     except JWTError:
-#         raise exception
-#     user = search_user(username)
-#     if user is None:
-#         raise exception
-#     return user
+def authenticate_user(db: Session, username: str, password: str):
+    user = get_user(username, db)
+    if not user or not crypt.verify(password, user.password):
+        return False
+    return user
 
-async def auth_user(token: str = Depends(oauth2), db: Session = Depends(get_db)):
-    exception = HTTPException(
+def create_access_token(*, data: dict, expires_delta: timedelta = None):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + expires_delta if expires_delta else datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Credenciales de autenticación inválidas",
+        detail="No se pudo validar las credenciales",
         headers={"WWW-Authenticate": "Bearer"}
     )
     try:
         payload = jwt.decode(token, SECRET, algorithms=[ALGORITHM])
-        username = payload.get("sub")
+        username: str = payload.get("sub")
         if username is None:
-            raise exception
+            raise credentials_exception
     except JWTError:
-        raise exception
-    user = search_user_db(username, db)
+        raise credentials_exception
+    user = get_user(username, db)
     if user is None:
-        raise exception
+        raise credentials_exception
     return user
-
-async def current_user(user: User = Depends(auth_user)):
-    if user.disabled:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Usuario inactivo"
-        )
-    return user
-
-# @router.post("/login")
-# async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-#     user_db = users_db.get(form_data.username)
-#     if not user_db:
-#         raise HTTPException(
-#             status_code=status.HTTP_400_BAD_REQUEST,
-#             detail="El usuario no es correcto"
-#         )
-#     user = search_user_db(form_data.username)
-#     if not crypt.verify(form_data.password, user.password):
-#         raise HTTPException(
-#             status_code=status.HTTP_400_BAD_REQUEST,
-#             detail="El usuario no es correcto"
-#         )
-#     access_token_expires = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_DURATION)
-#     access_token = jwt.encode({"sub": user.username, "exp": access_token_expires}, SECRET, algorithm=ALGORITHM)
-#     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.post("/login")
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user_db = search_user_db(form_data.username, db)
+    user_db = authenticate_user(db, form_data.username, form_data.password)
     if not user_db:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="El usuario no es correcto"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciales incorrectas",
+            headers={"WWW-Authenticate": "Bearer"}
         )
-    if not crypt.verify(form_data.password, user_db.password):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="El usuario no es correcto"
-        )
-    access_token_expires = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_DURATION)
-    access_token = jwt.encode({"sub": user_db.username, "exp": access_token_expires}, SECRET, algorithm=ALGORITHM)
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_DURATION)
+    access_token = create_access_token(data={"sub": user_db.username}, expires_delta=access_token_expires)
     return {"access_token": access_token, "token_type": "bearer"}
 
-@router.get("/users/me")
-async def read_users_me(current_user: User = Depends(current_user)):
+@router.get("/users/me", response_model=UserDB)
+async def read_users_me(current_user: UserDB = Depends(get_current_user)):
     return current_user
 
-# Nuevo endpoint para crear usuario
-@router.post("/register", response_model=User)
-async def register_user(user: UserCreate, db: Session = Depends(get_db)):
-    # Verificar si el usuario ya existe
+@router.post("/register", response_model=UserSchema)
+async def register_user(user: UserCreate, instrument: InstrumentCreate, db: Session = Depends(get_db)):
     db_user = db.query(UserModel).filter(UserModel.username == user.username).first()
     if db_user:
         raise HTTPException(status_code=400, detail="El nombre de usuario ya está en uso")
     
-    # Crear un nuevo usuario y guardar en la base de datos
     hashed_password = crypt.hash(user.password)
     new_user = UserModel(
         username=user.username,
@@ -163,33 +96,62 @@ async def register_user(user: UserCreate, db: Session = Depends(get_db)):
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+    
+    # Crear un nuevo instrumento asociado al usuario
+    new_instrument = InstrumentModel(name=instrument.name, description=instrument.description, price=instrument.price)
+    db.add(new_instrument)
+    db.commit()
+    db.refresh(new_instrument)
+    
+    # Asociar el instrumento al usuario
+    new_user.instruments.append(new_instrument)
+    db.commit()
+    
     return new_user
 
-@router.delete("/users/{username}")
-async def delete_user(username: str, db: Session = Depends(get_db)):
-    user_to_delete = db.query(UserModel).filter(UserModel.username == username).first()
-    if not user_to_delete:
+@router.delete("/users/{username}/instruments/{instrument_id}")
+async def delete_instrument(username: str, instrument_id: int, db: Session = Depends(get_db)):
+    user_to_delete_from = get_user(username, db)
+    if not user_to_delete_from:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     
-    db.delete(user_to_delete)
+    instrument_to_delete = db.query(InstrumentModel).filter(
+        InstrumentModel.id == instrument_id,
+        InstrumentModel.owners.contains(user_to_delete_from)
+    ).first()
+    if not instrument_to_delete:
+        raise HTTPException(status_code=404, detail="Instrumento no encontrado o no pertenece al usuario especificado")
+    
+    association = db.query(user_instrument_association).filter(
+        user_instrument_association.user_id == user_to_delete_from.id,
+        user_instrument_association.instrument_id == instrument_id
+    ).first()
+    
+    db.delete(association)
     db.commit()
-    return {"detail": f"Usuario {username} eliminado exitosamente"}
+    return {"detail": f"Instrumento {instrument_id} eliminado exitosamente del usuario {username}"}
 
-
-@router.patch("/users/{username}", response_model=User)
-async def update_user(username: str, user_update: UserUpdate, db: Session = Depends(get_db)):
-    user_to_update = db.query(UserModel).filter(UserModel.username == username).first()
-    if not user_to_update:
+@router.put("/users/{username}/instruments/{instrument_id}")
+async def update_instrument(username: str, instrument_id: int, instrument_update: InstrumentCreate, db: Session = Depends(get_db)):
+    user_to_update_from = get_user(username, db)
+    if not user_to_update_from:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     
-    if user_update.full_name:
-        user_to_update.full_name = user_update.full_name
-    if user_update.email:
-        user_to_update.email = user_update.email
-    if user_update.password:
-        user_to_update.password = crypt.hash(user_update.password)  # Hashea la nueva contraseña
+    instrument_to_update = db.query(InstrumentModel).filter(
+        InstrumentModel.id == instrument_id,
+        InstrumentModel.owners.contains(user_to_update_from)
+    ).first()
+    if not instrument_to_update:
+        raise HTTPException(status_code=404, detail="Instrumento no encontrado o no pertenece al usuario especificado")
     
-    db.add(user_to_update)
+    instrument_to_update.name = instrument_update.name
+    instrument_to_update.description = instrument_update.description
+    instrument_to_update.price = instrument_update.price
+    
+    association = db.query(user_instrument_association).filter(
+        user_instrument_association.user_id == user_to_update_from.id,
+        user_instrument_association.instrument_id == instrument_id
+    ).first()
+    
     db.commit()
-    db.refresh(user_to_update)
-    return user_to_update
+    return {"detail": f"Instrumento {instrument_id} actualizado exitosamente para el usuario {username}"}
