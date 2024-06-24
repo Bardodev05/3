@@ -1,6 +1,5 @@
-# carptea models nombre del archivo: models_instru.py
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 class Instrument(BaseModel):
     id: Optional[int] = None
@@ -12,9 +11,18 @@ class Instrument(BaseModel):
     class Config:
         orm_mode = True
 
-# Nuevo modelo de Pydantic para la creación de usuario
 class UserCreate(BaseModel):
     username: str
     full_name: str
     email: str
     password: str
+
+class User(BaseModel):
+    username: str
+    full_name: str
+    email: str
+    disabled: bool
+    instruments: Optional[List[Instrument]] = []
+
+    class Config:
+        orm_mode = True

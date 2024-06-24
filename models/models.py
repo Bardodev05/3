@@ -1,11 +1,17 @@
-# carpeta models nombre del archivo: models.py
-# aca deben de guardase los instrumentos y los usuarios
-from sqlalchemy import Column, ForeignKey, Integer, String, Boolean, Float
+# En tu archivo de modelos (auth_models.py)
+from sqlalchemy import Column, ForeignKey, Integer, String, Boolean, Float, Table
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSON
 
 Base = declarative_base()
+
+# Tabla de asociación
+user_instrument_association = Table(
+    'user_instrument', Base.metadata,
+    Column('user_id', Integer, ForeignKey('users.id')),
+    Column('instrument_id', Integer, ForeignKey('instrumentos.id'))
+)
 
 class User(Base):
     __tablename__ = 'users'
@@ -16,8 +22,8 @@ class User(Base):
     email = Column(String, unique=True, index=True)
     disabled = Column(Boolean, default=False)
     password = Column(String)
-    
-    instruments = relationship("Instrument", back_populates="owner")
+
+    instruments = relationship("Instrument", secondary=user_instrument_association, back_populates="users")
 
 class Instrument(Base):
     __tablename__ = 'instrumentos'
@@ -28,6 +34,4 @@ class Instrument(Base):
     price = Column(Float)
     tags = Column(JSON)
 
-    owner_id = Column(Integer, ForeignKey('users.id'))
-    owner = relationship("User", back_populates="instruments")
-
+    users = relationship("User", secondary=user_instrument_association, back_populates="instruments")
